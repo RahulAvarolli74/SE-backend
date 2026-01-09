@@ -14,6 +14,20 @@ const userSchema = new Schema(
       trim: true,
       uppercase: true
     },
+    hostelName: {
+      type: String,
+      required: true,
+      enum: [
+        "Nrupatunga Boys hostel",
+        "Sahyadri",
+        "Vindya",
+        "Saraswati",
+        "Shalmala",
+        "Shatavari",
+        "Shambavi",
+        "Need to know"
+      ]
+    },
     password: {
       type: String,
       required: true,

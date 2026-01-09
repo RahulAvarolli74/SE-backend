@@ -4,8 +4,6 @@ import { ApiRes } from "../utils/ApiRes.js";
 import { User } from "../models/user.model.js";
 import { Log } from "../models/cleanlog.model.js";
 import { Issue } from "../models/issue.model.js";
-// import { Feedback } from "../models/feedback.model.js"; 
-
 
 const generateAccessTokenandRefreshToken = async (id) => {
   try {
@@ -32,28 +30,28 @@ const generateAccessTokenandRefreshToken = async (id) => {
 };
 
 const loginStudent = asyncHandler(async (req, res) => {
-  const { room_no, password } = req.body;
+  // UPDATED: Destructure hostelName from request body
+  const { room_no, password, hostelName } = req.body;
 
-  if (!room_no || !password) {
-    throw new ApiError(400, "room_no and password are required");
+  if (!room_no || !password || !hostelName) {
+    throw new ApiError(400, "Room number, password, and hostel selection are required");
   }
 
-  console.log("Login attempt for room:", room_no);
+  console.log(`Login attempt for room: ${room_no} in hostel: ${hostelName}`);
 
+  // UPDATED: Find user by room AND hostelName to ensure correct scoping
   const userexist = await User.findOne({
-    room_no
+    room_no: room_no.toUpperCase(),
+    hostelName: hostelName,
+    role: "STUDENT"
   });
 
   if (!userexist) {
-    console.log("User not found for room:", room_no);
-    throw new ApiError(400, "Room notfound ");
+    console.log("User not found for room and hostel combination");
+    throw new ApiError(400, `Room ${room_no} not found in ${hostelName}`);
   }
 
-  // Debug: Check stored password hash (security risk in prod, ok for debug)
-  console.log("User found:", userexist.room_no);
-
   const ispassvalid = await userexist.ispasswordCorrect(password);
-  console.log("Password valid:", ispassvalid);
 
   if (!ispassvalid) {
     console.log("Invalid credentials");
@@ -80,6 +78,7 @@ const loginStudent = asyncHandler(async (req, res) => {
             _id: userexist._id,
             room_no: userexist.room_no,
             role: userexist.role,
+            hostelName: userexist.hostelName, // NEW: Include hostelName in response
           },
           accessToken,
           refreshToken,
@@ -112,28 +111,33 @@ const logoutStudent = asyncHandler(async (req, res) => {
 
 
 const getStudentDashboard = asyncHandler(async (req, res) => {
-  const room_no = req.user.room_no;
+  // UPDATED: Destructure both from the authenticated user object
+  const { room_no, hostelName } = req.user;
 
-  // 1. Last Cleaning Date
-  const lastCleaningLog = await Log.findOne({ room_no })
+  // 1. Last Cleaning Date - Filtered by hostelName
+  const lastCleaningLog = await Log.findOne({ room_no, hostelName })
     .sort({ createdAt: -1 });
 
-  // 2. This Month's Cleanings
+  // 2. This Month's Cleanings - Filtered by hostelName
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
   const monthCount = await Log.countDocuments({
     room_no: room_no,
+    hostelName: hostelName, // Scoped to hostel
     createdAt: { $gte: startOfMonth }
   });
 
+  // Filtered by hostelName
   const openIssuesCount = await Issue.countDocuments({
     room_no: room_no,
+    hostelName: hostelName, // Scoped to hostel
     status: { $in: ["Open", "In Progress"] }
   });
 
-  const recentActivity = await Log.find({ room_no })
+  // Filtered by hostelName
+  const recentActivity = await Log.find({ room_no, hostelName })
     .sort({ createdAt: -1 })
     .limit(3)
     .populate("worker", "name");
@@ -143,6 +147,7 @@ const getStudentDashboard = asyncHandler(async (req, res) => {
       200,
       {
         room_no: room_no,
+        hostelName: hostelName, // NEW: Confirm hostel in dashboard response
         stats: {
           lastCleaningDate: lastCleaningLog ? lastCleaningLog.createdAt : null,
           monthCount: monthCount,

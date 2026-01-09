@@ -1,24 +1,28 @@
 import { Worker } from "../models/worker.model.js";
-import { Log } from "../models/cleanlog.model.js"; // To count jobs per worker
+import { Log } from "../models/cleanlog.model.js"; 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiRes } from "../utils/ApiRes.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const addWorker = asyncHandler(async (req, res) => {
     const { name, phone, assigned_block } = req.body;
+    // NEW: Scope to the admin's hostel
+    const hostelName = req.user.hostelName; 
 
     if (!name || !phone) {
         throw new ApiError(400, "Name and Phone are required");
     }
 
-    const existing = await Worker.findOne({ phone });
+    // UPDATED: Check for existing phone number WITHIN the same hostel
+    const existing = await Worker.findOne({ phone, hostelName });
     if (existing) {
-        throw new ApiError(409, "Worker with this phone number already exists");
+        throw new ApiError(409, "Worker with this phone number already exists in this hostel");
     }
 
     const worker = await Worker.create({
         name,
         phone,
+        hostelName, // NEW: Save the hostel identity
         assigned_block: assigned_block || "General",
         status: "Active"
     });
@@ -29,12 +33,18 @@ const addWorker = asyncHandler(async (req, res) => {
 });
 
 const getWorkersWithStats = asyncHandler(async (req, res) => {
+    const hostelName = req.user.hostelName;
+
     const workers = await Worker.aggregate([
         {
+            // NEW: Only get workers belonging to this admin's hostel
+            $match: { hostelName: hostelName }
+        },
+        {
             $lookup: {
-                from: "logs", // Collection name for CleanLog
+                from: "logs", 
                 localField: "_id",
-                foreignField: "worker", // The field in Log model referencing Worker
+                foreignField: "worker", 
                 as: "workHistory"
             }
         },
@@ -44,6 +54,7 @@ const getWorkersWithStats = asyncHandler(async (req, res) => {
                 phone: 1,
                 assigned_block: 1,
                 status: 1,
+                hostelName: 1,
                 totalJobs: { $size: "$workHistory" },
                 rating: { $avg: "$workHistory.rating" }
             }
@@ -52,16 +63,18 @@ const getWorkersWithStats = asyncHandler(async (req, res) => {
     ]);
 
     return res.status(200).json(
-        new ApiRes(200, workers, "Workers fetched successfully")
+        new ApiRes(200, workers, `Workers for ${hostelName} fetched successfully`)
     );
 });
 
 const toggleWorkerStatus = asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const hostelName = req.user.hostelName;
 
-    const worker = await Worker.findById(id);
+    // UPDATED: Ensure admin can only toggle workers in their hostel
+    const worker = await Worker.findOne({ _id: id, hostelName });
     if (!worker) {
-        throw new ApiError(404, "Worker not found");
+        throw new ApiError(404, "Worker not found in your hostel");
     }
 
     worker.status = worker.status === "Active" ? "Inactive" : "Active";
@@ -73,7 +86,12 @@ const toggleWorkerStatus = asyncHandler(async (req, res) => {
 });
 
 const getActiveWorkersList = asyncHandler(async (req, res) => {
-    const workers = await Worker.find({ status: "Active" }).select("_id name");
+    // UPDATED: Only fetch active workers for the current user's hostel
+    const workers = await Worker.find({ 
+        status: "Active", 
+        hostelName: req.user.hostelName 
+    }).select("_id name");
+
     return res.status(200).json(
         new ApiRes(200, workers, "Active workers fetched successfully")
     );
@@ -82,22 +100,23 @@ const getActiveWorkersList = asyncHandler(async (req, res) => {
 const editWorker = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { name, phone, assigned_block } = req.body;
+    const hostelName = req.user.hostelName;
 
-    const worker = await Worker.findById(id);
+    // UPDATED: Ensure update is scoped to the admin's hostel
+    const worker = await Worker.findOne({ _id: id, hostelName });
     if (!worker) {
-        throw new ApiError(404, "Worker not found");
+        throw new ApiError(404, "Worker not found in your hostel");
     }
 
-    // Check if phone is being changed and if it conflicts with another worker
     if (phone && phone !== worker.phone) {
-        const existing = await Worker.findOne({ phone, _id: { $ne: id } });
+        // Check conflicts within the same hostel
+        const existing = await Worker.findOne({ phone, hostelName, _id: { $ne: id } });
         if (existing) {
-            throw new ApiError(409, "Worker with this phone number already exists");
+            throw new ApiError(409, "Worker with this phone number already exists in this hostel");
         }
         worker.phone = phone;
     }
 
-    // Update other fields if provided
     if (name) worker.name = name;
     if (assigned_block) worker.assigned_block = assigned_block;
 
@@ -108,5 +127,4 @@ const editWorker = asyncHandler(async (req, res) => {
     );
 });
 
-// Update exports
 export { addWorker, getWorkersWithStats, toggleWorkerStatus, getActiveWorkersList, editWorker };

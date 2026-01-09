@@ -9,6 +9,8 @@ const submitCleaningLog = asyncHandler(async (req, res) => {
     
     const room_no = req.user.room_no; 
     const room_id = req.user._id; 
+    // PRESERVED: Scope data by the user's assigned hostel
+    const hostelName = req.user.hostelName; 
 
     // FIX: Force cleaningType to be an array if it's a single string
     if (cleaningType && !Array.isArray(cleaningType)) {
@@ -33,7 +35,7 @@ const submitCleaningLog = asyncHandler(async (req, res) => {
         }
     }
 
-    // Duplicate Check
+    // Scoped Duplicate Check (Room + Hostel + Today)
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date();
@@ -41,6 +43,7 @@ const submitCleaningLog = asyncHandler(async (req, res) => {
 
     const existingLog = await Log.findOne({
         room_no: room_no,
+        hostelName: hostelName, // PRESERVED: scoping
         createdAt: { $gte: startOfDay, $lte: endOfDay }
     });
 
@@ -51,6 +54,7 @@ const submitCleaningLog = asyncHandler(async (req, res) => {
     const newLog = await Log.create({
         room_id: room_id,          
         room_no: room_no,          
+        hostelName: hostelName, // PRESERVED: Tag log with the specific hostel
         worker: worker,        
         cleaningType: cleaningType,       
         cleanstatus: "Verified",   
@@ -64,30 +68,37 @@ const submitCleaningLog = asyncHandler(async (req, res) => {
     );
 });
 
-// STUDENT: Get History
+// STUDENT: Get History (Scoped to their hostel)
 const getMyRoomHistory = asyncHandler(async (req, res) => {
     const room_no = req.user.room_no;
+    const hostelName = req.user.hostelName;
     
-    // Debug log to ensure we are querying for the right room
-    console.log(`Fetching history for room: ${room_no}`);
+    console.log(`Fetching history for room: ${room_no} in hostel: ${hostelName}`);
 
-    const history = await Log.find({ room_no })
-        .populate("worker", "name") 
-        .sort({ createdAt: -1 });   
+    // Filter by both room_no AND hostelName to ensure data isolation
+    const history = await Log.find({ 
+        room_no, 
+        hostelName 
+    })
+    .populate("worker", "name") 
+    .sort({ createdAt: -1 });   
 
     return res.status(200).json(
         new ApiRes(200, history, "Cleaning history fetched successfully")
     );
 });
 
-// ADMIN: Get All Logs
+// ADMIN: Get All Logs (Scoped to the Admin's assigned hostel)
 const getAllLogs = asyncHandler(async (req, res) => {
-    const logs = await Log.find()
+    const hostelName = req.user.hostelName;
+
+    // Admin should only see logs for their specific hostel
+    const logs = await Log.find({ hostelName })
         .populate("worker", "name")
         .sort({ createdAt: -1 });
 
     return res.status(200).json(
-        new ApiRes(200, logs, "All cleaning logs fetched")
+        new ApiRes(200, logs, `All cleaning logs for ${hostelName} fetched`)
     );
 });
 

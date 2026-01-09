@@ -6,6 +6,11 @@ const workerSchema = new Schema({
         required: true,
         trim: true
     },
+    hostelName: {
+      type: String,
+      required: true,
+      enum: ["Nrupatunga Boys hostel", "Sahyadri", "Vindya", "Saraswati", "Shalmala", "Shatavari", "Shambavi", "Need to know"]
+    },
     assigned_block: {
         type: String,
         required: true

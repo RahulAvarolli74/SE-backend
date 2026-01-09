@@ -4,9 +4,7 @@ import { ApiRes } from "../utils/ApiRes.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import { User } from "../models/user.model.js";
-
 import { Worker } from "../models/worker.model.js";
-// import { Feedback } from "../models/feedback.model.js"; // This handles "Issues"
 import { Log } from "../models/cleanlog.model.js";
 import { Issue } from "../models/issue.model.js";
 
@@ -36,19 +34,27 @@ const generateAccessTokenandRefreshToken = async (id) => {
 
 const createStudentRoom = asyncHandler(async (req, res) => {
   const { room_no, password } = req.body;
+  const adminHostel = req.user.hostelName; // Scoped to admin's assigned hostel
 
   if (!room_no || !password) {
     throw new ApiError(400, "room_no and password are required");
   }
 
-  const existing = await User.findOne({ room_no, role: "STUDENT" });
+  // Scoped check: Room must be unique within this specific hostel
+  const existing = await User.findOne({ 
+    room_no: room_no.toUpperCase(), 
+    hostelName: adminHostel, 
+    role: "STUDENT" 
+  });
+
   if (existing) {
-    throw new ApiError(409, "Room already exists in the database");
+    throw new ApiError(409, `Room ${room_no} already exists in ${adminHostel}`);
   }
 
   const user = await User.create({
-    room_no,
+    room_no: room_no.toUpperCase(),
     password,
+    hostelName: adminHostel, // Tag the new room with the admin's hostel
     role: "STUDENT",
   });
 
@@ -60,6 +66,7 @@ const createStudentRoom = asyncHandler(async (req, res) => {
           _id: user._id,
           room_no: user.room_no,
           role: user.role,
+          hostelName: user.hostelName
         },
       },
       "Student room credentials created successfully"
@@ -68,14 +75,17 @@ const createStudentRoom = asyncHandler(async (req, res) => {
 });
 
 const loginadmin = asyncHandler(async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    throw new ApiError(400, "All fields are required");
+  console.log("LOGIN DATA RECEIVED:", req.body);
+  const { username, password, hostelName } = req.body; // Retrieve hostelName from frontend
+  
+  if (!username || !password || !hostelName) {
+    throw new ApiError(400, "Username, password, and hostel selection are required");
   }
 
-  const userexist = await User.findOne({ username });
+  // Find admin within specific hostel
+  const userexist = await User.findOne({ username, hostelName, role: "ADMIN" });
   if (!userexist) {
-    throw new ApiError(400, "User does not exist");
+    throw new ApiError(400, "Admin user does not exist in the selected hostel");
   }
 
   const ispassvalid = await userexist.ispasswordCorrect(password);
@@ -105,7 +115,7 @@ const loginadmin = asyncHandler(async (req, res) => {
           accessToken,
           refreshToken,
         },
-        "User logged in successfully"
+        "Admin logged in successfully"
       )
     );
 });
@@ -135,26 +145,29 @@ const logoutadmin = asyncHandler(async (req, res) => {
 
 
 const getAdminDashboard = asyncHandler(async (req, res) => {
+  const hostel = req.user.hostelName; // Identify which hostel we are reporting for
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
   const lastWeekStart = new Date();
   lastWeekStart.setDate(lastWeekStart.getDate() - 7);
 
+  // 1. Scoped Counters
   const [
     totalWorkers,
     cleaningsToday,
     weeklySubmissions,
     pendingIssues 
   ] = await Promise.all([
-    Worker.countDocuments(),
-    Log.countDocuments({ createdAt: { $gte: todayStart } }),
-    Log.countDocuments({ createdAt: { $gte: lastWeekStart } }),
-    Issue.countDocuments({ status: { $in: ["Open", "In Progress"] } })
+    Worker.countDocuments({ hostelName: hostel }),
+    Log.countDocuments({ hostelName: hostel, createdAt: { $gte: todayStart } }),
+    Log.countDocuments({ hostelName: hostel, createdAt: { $gte: lastWeekStart } }),
+    Issue.countDocuments({ hostelName: hostel, status: { $in: ["Open", "In Progress"] } })
   ]);
 
-  // 3. Worker Performance Chart
+  // 2. Scoped Worker Performance Chart
   const workerPerformance = await Log.aggregate([
+    { $match: { hostelName: hostel } }, // Filter by hostel first
     {
       $group: {
         _id: "$worker", 
@@ -181,10 +194,10 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
     { $limit: 5 }
   ]);
 
-  // 4. Task Distribution Chart
-  // Uses field 'cleaningType' (Array of Strings) from your Log schema
+  // 3. Scoped Task Distribution Chart
   const taskDistribution = await Log.aggregate([
-    { $unwind: "$cleaningType" }, // Deconstructs the array (e.g. ["Sweeping", "Mopping"] becomes 2 docs)
+    { $match: { hostelName: hostel } }, // Filter by hostel
+    { $unwind: "$cleaningType" },
     { 
       $group: { 
         _id: "$cleaningType", 
@@ -200,10 +213,11 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
     }
   ]);
 
-  // 5. Weekly Trend Chart
+  // 4. Scoped Weekly Trend Chart
   const weeklyTrend = await Log.aggregate([
     {
       $match: {
+        hostelName: hostel,
         createdAt: { $gte: lastWeekStart }
       }
     },
@@ -216,8 +230,9 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
     { $sort: { _id: 1 } }
   ]);
 
-  // 6. Recent Issues List (From ISSUE model)
+  // 5. Scoped Recent Issues List
   const recentIssues = await Issue.find({
+    hostelName: hostel,
     status: { $in: ["Open", "In Progress"] }
   })
   .sort({ createdAt: -1 })
@@ -239,9 +254,10 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
           taskDistribution,
           weeklyTrend
         },
-        recentIssues: recentIssues
+        recentIssues: recentIssues,
+        hostelName: hostel // NEW: Include hostel name in response
       },
-      "Admin Dashboard data fetched successfully"
+      `Admin Dashboard data for ${hostel} fetched successfully`
     )
   );
 });
